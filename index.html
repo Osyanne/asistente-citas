@@ -352,6 +352,7 @@ footer.foot .inner { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-cont
           <div class="row">
             <button id="esc1" type="button">Agendan a las 22:47</button>
             <button id="esc2" type="button">Recordatorio un día antes</button>
+            <button id="esc3" type="button" style="display:none">Aviso de vacuna</button>
             <button id="reset" type="button">Reiniciar</button>
           </div>
         </div>
@@ -456,7 +457,9 @@ const NICHOS = {
     dir: 'Av. El Rey y Pichincha, Ambato', horario: 'Lunes a sábado de 9:00 a 18:00. Emergencias por llamada.',
     pago: 'Aceptamos efectivo, transferencia y tarjeta.', nombre: '¿Cómo se llama su mascota y a nombre de quién agendo?', ejemploNombre: 'Toby, de Ana Carrasco',
     servicios: [['Consulta', 15], ['Vacunación', 20], ['Desparasitación', 10], ['Baño y corte', 18]],
-    ocupado: [['Vacuna', 'Luna (S. Pérez)'], ['Consulta', 'Max (D. Tapia)'], ['Baño', 'Coco (M. Ríos)'], ['Desparasitación', 'Kira (L. Vela)'], ['Consulta', 'Rocky (E. Paz)']] },
+    ocupado: [['Vacuna', 'Luna (S. Pérez)'], ['Consulta', 'Max (D. Tapia)'], ['Baño', 'Coco (M. Ríos)'], ['Desparasitación', 'Kira (L. Vela)'], ['Consulta', 'Rocky (E. Paz)']],
+    // Aviso periódico: el asistente le escribe solo al dueño cuando a su mascota le toca la vacuna.
+    vacuna: { mascota: 'Canela', dueno: 'Paola Mena', texto: 'refuerzo anual de la vacuna antirrábica', servicio: 'Vacunación' } },
   // dias: días que atiende (0 = domingo) con sus turnos; web: lee el formulario de la web; privada: servicio sin detalles del motivo; rojas: banderas rojas; aviso: pie del saludo.
   urologia: { tab: 'Urología', negocio: 'Consultorio de Urología', pro: 'la doctora', cita: 'cita', citas: 'citas',
     dir: 'Calle Sucre y Lalama, Ambato', horario: 'Lunes y martes de 16:30 a 19:00. Sábados y domingos de 9:00 a 12:30. Turnos de 30 minutos.',
@@ -599,6 +602,7 @@ async function escrito(texto) {
 
 const menu = () => [{ label: `Agendar ${N.cita}`, v: 'agendar' }, ...(N.privada ? [{ label: N.privada, v: 'privada' }] : []), { label: 'Precios', v: 'precios' }, { label: 'Horario y ubicación', v: 'info' }, { label: `Cambiar o cancelar mi ${N.cita}`, v: 'cambiar' }];
 const iniciales = n => n.trim().split(/\s+/).map(w => `${w[0].toUpperCase()}.`).join(' ');
+const aPro = () => N.pro.startsWith('el ') ? `al ${N.pro.slice(3)}` : `a ${N.pro}`;
 // Lo que ve el negocio en la agenda: si el tema es sensible, solo iniciales.
 const vista = (c, n = c.nombre) => c.priv ? { servicio: 'Consulta – iniciales', nombre: iniciales(n) } : { servicio: c.servicio, nombre: n };
 
@@ -623,6 +627,8 @@ async function responder(texto, v) {
   if (!v && S.paso === 'nombre') return pedirConfirmacion(cap(texto));
   if (!v && N.privada && /privad|sexual/.test(t)) v = 'privada';
   if (!v && S.paso === 'servicio') { const s = N.servicios.find(([n]) => t.includes(norm(n).split(' ')[0])); if (s) v = `serv:${s[0]}`; }
+  if (!v && S.paso === 'vacuna' && /ya (esta|fue) vacun|ya tiene (la|su) vacuna|ya (la|lo) vacune/.test(t)) v = 'yaVacunado';
+  if (!v && /^baja\b/.test(t)) v = 'baja';
   if (!v) {
     if (/cancel/.test(t)) v = 'cancelar';
     else if (/cambi|reprogram|mover|otra hora|otro dia/.test(t)) v = 'cambiar';
@@ -630,18 +636,23 @@ async function responder(texto, v) {
     else if (/horario|hora de atencion|abren|cierran|direcc|donde|ubica|queda/.test(t)) v = 'info';
     else if (/tarjeta|pago|pagar|transferen|efectivo|seguro/.test(t)) v = 'pago';
     else if (/cita|agend|turno|reserv|sesion|espacio|disponib/.test(t)) v = 'agendar';
-    else if (/^(si|confirmo|ok|listo|dale|claro|de acuerdo)\b/.test(t)) v = S.paso === 'recordatorio' ? 'confirmo' : S.paso === 'confirmar' ? 'agendarSi' : 'agendar';
+    else if (/^(si|confirmo|ok|listo|dale|claro|de acuerdo)\b/.test(t)) v = S.paso === 'recordatorio' ? 'confirmo' : S.paso === 'confirmar' ? 'agendarSi' : S.paso === 'vacuna' ? `serv:${N.vacuna.servicio}` : 'agendar';
     else if (/gracias|chevere|excelente|perfecto/.test(t)) v = 'gracias';
     else if (/^(hola|buen|saludos|que tal|alo)/.test(t)) v = 'hola';
     else v = 'humano';
   }
   if (v === 'hola') { S.paso = 'menu'; return bot(`¡Hola! Soy el asistente de ${N.negocio}. Le ayudo a agendar su ${N.cita} en menos de un minuto, a cualquier hora. ¿Qué necesita?${N.aviso ?? ''}`, menu()); }
   if (v === 'urgencia') {
-    S.paso = 'menu'; evento(`Aviso urgente a ${N.pro}`, 'alerta');
-    return bot(`Lo que me cuenta puede ser una urgencia. Por favor acuda ahora a emergencias del hospital más cercano o llame al 911; no espere a una ${N.cita}. Ya avisé a ${N.pro}.`);
+    S.paso = 'menu'; evento(`Aviso urgente ${aPro()}`, 'alerta');
+    return bot(`Lo que me cuenta puede ser una urgencia. Por favor acuda ahora a emergencias del hospital más cercano o llame al 911; no espere a una ${N.cita}. Ya avisé ${aPro()}.`);
   }
   if (v === 'privada') { S.borrador = {}; v = `serv:${N.privada}`; }
   if (v === 'gracias') { S.paso = 'menu'; return bot('¡Con gusto! Si necesita algo más, escríbame por aquí.'); }
+  if (v === 'yaVacunado') {
+    S.paso = 'menu'; evento(`${N.vacuna.dueno} avisó que ${N.vacuna.mascota} ya tiene la vacuna: revise su ficha`);
+    return bot(`¡Gracias por avisar! Le paso el dato ${aPro()} para que actualice la ficha de ${N.vacuna.mascota}.`);
+  }
+  if (v === 'baja') { S.paso = 'menu'; evento('Pidió no recibir más recordatorios ni avisos'); return bot('Listo, no le enviaré más recordatorios. Si cambia de opinión, escríbame por aquí.'); }
   if (v === 'pago') return bot(`${N.pago}\n¿Le agendo una ${N.cita}?`, [{ label: `Agendar ${N.cita}`, v: 'agendar' }]);
   if (v === 'precios') { S.paso = 'menu'; return bot(`Estos son nuestros precios:\n${N.servicios.map(([n, p]) => `• ${n}: $${p}`).join('\n')}\n¿Le agendo una ${N.cita}?`, [{ label: `Agendar ${N.cita}`, v: 'agendar' }, { label: 'Horario y ubicación', v: 'info' }]); }
   if (v === 'info') { S.paso = 'menu'; return bot(`Atendemos ${N.horario.charAt(0).toLowerCase() + N.horario.slice(1)}\n📍 ${N.dir}\n¿Le agendo una ${N.cita}?`, [{ label: `Agendar ${N.cita}`, v: 'agendar' }, { label: 'Precios', v: 'precios' }]); }
@@ -660,7 +671,7 @@ async function responder(texto, v) {
   if (v.startsWith('hora:')) {
     S.borrador.h = v.slice(5);
     if (S.borrador.mover) return moverCita();
-    if (N.web && S.borrador.nombre) return pedirConfirmacion(S.borrador.nombre);
+    if ((N.web || S.borrador.conocido) && S.borrador.nombre) return pedirConfirmacion(S.borrador.nombre);
     S.paso = 'nombre'; $('entrada').placeholder = 'Escriba el nombre';
     return bot(N.nombre);
   }
@@ -689,7 +700,9 @@ async function responder(texto, v) {
 async function pedirConfirmacion(nombre) {
   S.borrador.nombre = nombre; S.paso = 'confirmar'; $('entrada').placeholder = 'Mensaje';
   const b = S.borrador;
-  return bot(`Perfecto, ${nombre.split(',')[0]}. Le confirmo:\n${b.servicio}\n${may(fLarga(agenda[b.dia].fecha))} a las ${b.h}\nCon ${N.pro}, ${N.dir}\n¿La agendo?`, [{ label: 'Sí, agendar', v: 'agendarSi' }, { label: 'Elegir otra hora', v: `serv:${b.servicio}` }]);
+  // "Toby, de Ana Carrasco": se le habla a la dueña, no a la mascota.
+  const quien = nombre.includes(', de ') ? nombre.split(', de ')[1].split(' ')[0] : nombre.split(',')[0];
+  return bot(`Perfecto, ${quien}. Le confirmo:\n${b.servicio}\n${may(fLarga(agenda[b.dia].fecha))} a las ${b.h}\nCon ${N.pro}, ${N.dir}\n¿La agendo?`, [{ label: 'Sí, agendar', v: 'agendarSi' }, { label: 'Elegir otra hora', v: `serv:${b.servicio}` }]);
 }
 async function agendar() {
   const b = S.borrador; const s = agenda[b.dia].slots.find(x => x.h === b.h);
@@ -720,9 +733,18 @@ async function recordatorio() {
   S.paso = 'recordatorio';
   await bot(`Hola, ${S.cita.nombre}. Le recuerdo su ${N.cita} de ${S.cita.servicio.toLowerCase()} mañana a las ${S.cita.h}. ¿Nos confirma su asistencia?`, [{ label: 'Confirmo', v: 'confirmo' }, { label: 'Necesito cambiarla', v: 'cambiarla' }]);
 }
+// La mascota ya es paciente: el asistente sabe su nombre y el del dueño, así que no los vuelve a pedir.
+async function avisoVacuna() {
+  const V = N.vacuna;
+  reloj = { h: 9, m: 0 }; avanzar(0);
+  nodo('sys', `Simulación: hace un año ${V.mascota} recibió la vacuna antirrábica y ya le toca el refuerzo. El asistente escribe solo a las 9:00.`);
+  evento(`Envió el aviso de vacuna de ${V.mascota} a ${V.dueno}`);
+  S.paso = 'vacuna'; S.borrador = { nombre: `${V.mascota}, de ${V.dueno}`, conocido: true };
+  await bot(`Hola, ${V.dueno.split(' ')[0]}. Le escribe el asistente de la ${N.negocio}. A ${V.mascota} le toca su ${V.texto} esta semana. ¿Le agendo una ${N.cita}?`, [{ label: 'Agendar vacuna', v: `serv:${V.servicio}` }, { label: 'Ya tiene la vacuna', v: 'yaVacunado' }, { label: 'No avisarme más', v: 'baja' }]);
+}
 
 // Ejemplos automáticos: sirven para mostrar la demo sin tocar nada.
-function bloquear(on) { ['esc1', 'esc2', 'reset'].forEach(id => $(id).disabled = on); $('entrada').disabled = on; reproduciendo = on; }
+function bloquear(on) { ['esc1', 'esc2', 'esc3', 'reset'].forEach(id => $(id).disabled = on); $('entrada').disabled = on; reproduciendo = on; }
 async function tocar(pred) {
   await espera(900);
   const ops = [...document.querySelectorAll('#log .replies:not([aria-disabled]) button')];
@@ -758,6 +780,17 @@ async function ejemploRecordatorio() {
   try { await recordatorio(); await tocar(b => /confirmo/i.test(b.textContent)); }
   finally { bloquear(false); }
 }
+async function ejemploVacuna() {
+  bloquear(true);
+  try {
+    iniciar(true);
+    await avisoVacuna();
+    await tocar(b => /agendar vacuna/i.test(b.textContent));
+    await tocar(() => false);
+    await tocar((b, i) => i === 1);
+    await tocar(b => /sí, agendar/i.test(b.textContent));
+  } finally { bloquear(false); }
+}
 
 function iniciar(silencio) {
   S = { paso: 'menu', cita: null, borrador: {} };
@@ -766,6 +799,7 @@ function iniciar(silencio) {
   $('log').innerHTML = ''; $('entrada').placeholder = 'Escriba: hola';
   $('feed').innerHTML = '<li><time>—</time><span>Escriba en el celular para empezar.</span></li>'; $('feed').dataset.vacio = '';
   $('negocio').textContent = N.negocio; $('avatar').textContent = N.negocio.charAt(0);
+  $('esc3').style.display = N.vacuna ? '' : 'none';
   nodo('chip-day', 'Hoy');
   if (!silencio) bot(`¡Hola! Soy el asistente de ${N.negocio}. Escríbame lo que necesite o elija una opción.${N.aviso ?? ''}`, menu());
 }
@@ -787,6 +821,7 @@ $('composer').addEventListener('submit', e => {
 });
 $('esc1').onclick = ejemploNoche;
 $('esc2').onclick = ejemploRecordatorio;
+$('esc3').onclick = ejemploVacuna;
 $('reset').onclick = () => { if (!reproduciendo && !ocupadoChat) iniciar(); };
 document.querySelectorAll('.copiar').forEach(b => b.onclick = async () => {
   const n = $(b.dataset.num);
